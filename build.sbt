@@ -11,7 +11,7 @@ addCommandAlias("fmtCheck", "all scalafmtSbtCheck scalafmtCheck test:scalafmtChe
 inThisBuild(
   List(
     organization      := "com.schuwalow",
-    homepage          := Some(url("https://github.com/mschuwalow/play-ziojson")),
+    homepage          := Some(url("https://github.com/mschuwalow/zio-stmt")),
     developers        := List(
       Developer(
         "mschuwalow",
@@ -32,25 +32,13 @@ lazy val root = (project in file("."))
     publish / skip     := true,
     crossScalaVersions := Nil
   )
-  .aggregate(lib, example)
+  .aggregate(core)
 
-lazy val lib = (project in file("lib"))
+lazy val core = (project in file("core"))
   .settings(extraCompilerOptions)
   .settings(
-    name               := "play-ziojson",
+    name               := "zio-stmt",
     testFrameworks     := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
-    libraryDependencies ++= Dependencies.Lib,
+    libraryDependencies ++= Dependencies.Core,
     crossScalaVersions := Seq(Scala213, Scala3)
-  )
-
-lazy val example = (project in file("example"))
-  .enablePlugins(PlayScala)
-  .disablePlugins(PlayLayoutPlugin)
-  .settings(publish / skip := true)
-  .dependsOn(lib)
-  .settings(extraCompilerOptions)
-  .settings(
-    name           := "play-ziojson-example",
-    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
-    libraryDependencies += guice
   )
