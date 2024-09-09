@@ -69,7 +69,7 @@ trait TestConstructors {
       }
     }
 
-  def checkConcurrent[R, A: Tag](smm: StateMachineModel[R, A], makeRealThing: RLayer[R, A])(implicit
+  def checkLineralizability[R, A: Tag](smm: StateMachineModel[R, A], makeRealThing: RLayer[R, A])(implicit
     sl: SourceLocation,
     t: Trace
   ): Spec[R, Throwable] =

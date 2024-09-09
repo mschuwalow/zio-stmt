@@ -2,16 +2,18 @@ package com.schuwalow.zio.stmt
 
 import zio.internal.stacktracer.SourceLocation
 import zio.test.Assertion.Arguments.valueArgument
-import zio.test.Assertion.equalTo
+import zio.test.Assertion.{equalTo, isTrue}
 import zio.test.{ErrorMessage => M, _}
 import zio.{test => _, _}
+import scala.annotation.tailrec
 
-object ConcurrentCheck {
+object ModelChecks {
 
-  def checkSequentialProgram[R, A](
-    implementation: A,
+  def checkConsistencyWithModel[R, A](
     smm: StateMachineModel[R, A]
   )(
+    implementation: A,
+    model: smm.Model,
     program: List[smm.Command]
   )(implicit
     sl: SourceLocation,
@@ -63,13 +65,14 @@ object ConcurrentCheck {
             result                    <- go(nextModel, futureCommands, command :: trace)
           } yield result
       }
-    go(smm.initModel, program, Nil)
+    go(model, program, Nil)
   }
 
-  def checkConcurrentProgram[R, A](
-    realThing: A,
+  def checkLineralizability[R, A](
     smm: StateMachineModel[R, A]
   )(
+    implementation: A,
+    model: smm.Model,
     program: List[List[smm.Command]]
   )(implicit
     sl: SourceLocation,
@@ -77,7 +80,6 @@ object ConcurrentCheck {
   ): RIO[R, TestResult] = {
     type CommandAndResponseF[+T <: smm.Command] = (T, T#Response)
     type CommandAndResponse = CommandAndResponseF[smm.Command]
-
 
     sealed trait Operation
 
@@ -89,12 +91,14 @@ object ConcurrentCheck {
     type Interleavings = Forest[CommandAndResponse]
 
     def allInterleavings(history: History): Interleavings = {
+      @tailrec
       def takeInvocations(history: History, acc: List[FiberId] = Nil): List[FiberId] =
         history match {
           case Invoke(fiberId) :: xs => takeInvocations(xs, fiberId :: acc)
           case _ => acc.reverse
         }
 
+      @tailrec
       def findResponse(fiberId: FiberId, history: History, acc: History = Nil): Option[(CommandAndResponse, History)] = {
         history match {
           case Nil => None
@@ -107,6 +111,7 @@ object ConcurrentCheck {
     }
 
     def linearizable(interleavings: Interleavings, model: smm.Model): Boolean = {
+      @tailrec
       def go(stack: List[(smm.Model, Interleavings)]): Boolean =
         stack match {
           case Nil => false
@@ -123,6 +128,19 @@ object ConcurrentCheck {
       go(List((model, interleavings)))
     }
 
-    ???
+    def runConcurrentCommand(command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
+      for {
+        fiberId  <- ZIO.fiberId
+        _        <- historyRef.update(Invoke(fiberId) :: _)
+        response <- command.dispatch(implementation)
+        _        <- historyRef.update(Complete(fiberId, (command, response)) :: _)
+      } yield ()
+
+    for {
+      historyRef <- Ref.make[History](Nil)
+      _ <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
+      history <- historyRef.get.map(_.reverse)
+      interleavings = allInterleavings(history)
+    } yield assert(linearizable(interleavings, model))(isTrue)
   }
 }
