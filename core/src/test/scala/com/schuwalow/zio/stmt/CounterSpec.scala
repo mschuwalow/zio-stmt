@@ -5,6 +5,6 @@ import zio.test.{TestAspect, ZIOSpecDefault}
 
 object CounterSpec extends ZIOSpecDefault {
   def spec = suite("Counter")(
-    checkModel(CounterStateMachineModel, ZLayer(Counter.make)) @@ TestAspect.failing
+    checkModel(CounterModel, ZLayer(Counter.make)) @@ TestAspect.failing
   )
 }
