@@ -31,7 +31,7 @@ object CounterModel extends StateMachineModel[Any, Counter] {
   def generateCommand =
     Gen.oneOf(
       Gen.const(Get),
-      Gen.int.map(Increment(_))
+      Gen.int(0, Int.MaxValue).map(Increment(_))
     )
 
   def initModel = BigInt(0)

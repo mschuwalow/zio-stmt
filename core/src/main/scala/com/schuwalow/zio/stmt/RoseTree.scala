@@ -16,5 +16,12 @@ object RoseTree {
     go(s)
   }
 
-  def unfoldForest[A, S](s: S)(f: S => List[(A, S)]): Forest[A] = ???
+  def unfoldForest[A, S](s: S)(f: S => List[(A, S)]): Forest[A] = {
+    def go(s: S): Forest[A] = {
+      f(s).map { case (a, ss) =>
+        RoseTree(a, go(ss))
+      }
+    }
+    go(s)
+  }
 }

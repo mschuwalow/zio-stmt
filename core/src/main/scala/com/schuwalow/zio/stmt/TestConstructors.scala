@@ -75,7 +75,7 @@ trait TestConstructors {
   ): Spec[R, Throwable] =
     test(s"${Tag[A].tag.repr} fulfills linearizablity") {
       check(smm.generateConcurrentProgram()) { program =>
-        ZIO.serviceWithZIO[A](ModelChecks.checkLineralizability(smm)(_, smm.initModel, program))
-      }.provideSomeLayer[R](makeRealThing)
+        ZIO.serviceWithZIO[A](ModelChecks.checkLineralizability(smm)(_, smm.initModel, program)).provideSomeLayer[R](makeRealThing)
+      }
     }
 }

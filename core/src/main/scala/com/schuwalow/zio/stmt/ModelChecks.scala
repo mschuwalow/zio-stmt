@@ -6,6 +6,7 @@ import zio.test.Assertion.{equalTo, isTrue}
 import zio.test.{ErrorMessage => M, _}
 import zio.{test => _, _}
 import scala.annotation.tailrec
+import scala.collection.mutable
 
 object ModelChecks {
 
@@ -83,64 +84,73 @@ object ModelChecks {
 
     sealed trait Operation
 
-    case class Invoke(fiberId: FiberId) extends Operation
-    case class Complete(fiberId: FiberId, cnr: CommandAndResponse) extends Operation
+    case class Begin(id: Long) extends Operation
+    case class Complete(id: Long, cnr: CommandAndResponse) extends Operation
 
     type History = List[Operation]
 
-    type Interleavings = Forest[CommandAndResponse]
-
-    def allInterleavings(history: History): Interleavings = {
+    def linearizable(history: History, model: smm.Model): Boolean = {
       @tailrec
-      def takeInvocations(history: History, acc: List[FiberId] = Nil): List[FiberId] =
+      def findResponse(id: Long, history: History, acc: History = Nil): (CommandAndResponse, History) = {
         history match {
-          case Invoke(fiberId) :: xs => takeInvocations(xs, fiberId :: acc)
-          case _ => acc.reverse
-        }
-
-      @tailrec
-      def findResponse(fiberId: FiberId, history: History, acc: History = Nil): Option[(CommandAndResponse, History)] = {
-        history match {
-          case Nil => None
-          case Complete(`fiberId`, cnr) :: xs => Some((cnr, acc.reverse ++ xs))
-          case x :: xs => findResponse(fiberId, xs, x :: acc)
+          case Nil => throw new IllegalStateException("No response found")
+          case Complete(`id`, cnr) :: xs => (cnr, acc.reverse ++ xs)
+          case Begin(`id`) :: xs => findResponse(id, xs, acc)
+          case x :: xs => findResponse(id, xs, x :: acc)
         }
       }
 
-      RoseTree.unfoldForest(history)(history => takeInvocations(history).flatMap(findResponse(_, history)))
-    }
-
-    def linearizable(interleavings: Interleavings, model: smm.Model): Boolean = {
       @tailrec
-      def go(stack: List[(smm.Model, Interleavings)]): Boolean =
-        stack match {
-          case Nil => false
-          case (_, Nil) :: _ => true
-          case (model, interleavings) :: xs =>
-            val next = interleavings.flatMap {
-              case RoseTree((command, response), children) =>
-                val (nextModel, modelResponse) = command.dispatchModel(model)
-                if (response != modelResponse) Nil
-                else List((nextModel, children))
-            }
-            go(next ++ xs)
+      def takeConcurrentInvocations(history: History, acc: List[Long] = Nil): List[Long] =
+        history match {
+          case Begin(id) :: xs => takeConcurrentInvocations(xs, id :: acc)
+          case _ => acc.reverse
         }
-      go(List((model, interleavings)))
+
+      val stack = mutable.Stack.empty[(smm.Model, CommandAndResponse, History)]
+
+      def pushNextStates(model: smm.Model, history: History): Unit =
+        for (id <- takeConcurrentInvocations(history)) {
+          val (cnr, remainingHistory) = findResponse(id, history)
+          stack.push((model, cnr, remainingHistory))
+        }
+
+      pushNextStates(model, history)
+
+      var found = false
+      var min = history.size
+      while (!found && stack.nonEmpty) {
+        val (model, (command, response), history) = stack.pop()
+        val (nextModel, modelResponse) = command.dispatchModel(model)
+        if (response == modelResponse) {
+          min = min min history.size
+          if (history.isEmpty) found = true
+          else pushNextStates(nextModel, history)
+        }
+      }
+
+      found
     }
 
-    def runConcurrentCommand(command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
+    val programWithIds = program.foldRight((0L, List.empty[List[(Long, smm.Command)]])) { case (commands, (counter, acc)) =>
+      val (nextCounter, commandsWithId) = commands.foldRight((counter, List.empty[(Long, smm.Command)])) { case (command, (counter, acc)) =>
+        val nextCounter = counter + 1
+        (nextCounter, (counter, command) :: acc)
+      }
+      (nextCounter, commandsWithId :: acc)
+    }._2
+
+    def runConcurrentCommand(id: Long, command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
       for {
-        fiberId  <- ZIO.fiberId
-        _        <- historyRef.update(Invoke(fiberId) :: _)
+        _        <- historyRef.update(Begin(id) :: _)
         response <- command.dispatch(implementation)
-        _        <- historyRef.update(Complete(fiberId, (command, response)) :: _)
+        _        <- historyRef.update(Complete(id, (command, response)) :: _)
       } yield ()
 
     for {
       historyRef <- Ref.make[History](Nil)
-      _ <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
+      _ <- ZIO.foreachDiscard(programWithIds)(ZIO.foreachParDiscard(_)( { case (id, cmd) => runConcurrentCommand(id, cmd, historyRef) }))
       history <- historyRef.get.map(_.reverse)
-      interleavings = allInterleavings(history)
-    } yield assert(linearizable(interleavings, model))(isTrue)
+    } yield assert(linearizable(history, model))(isTrue)
   }
 }
