@@ -5,6 +5,7 @@ import zio.test.Assertion.Arguments.valueArgument
 import zio.test.Assertion.{equalTo, isTrue}
 import zio.test.{ErrorMessage => M, _}
 import zio.{test => _, _}
+
 import scala.annotation.tailrec
 import scala.collection.mutable
 
@@ -80,47 +81,53 @@ object ModelChecks {
     t: Trace
   ): RIO[R, TestResult] = {
     type CommandAndResponseF[+T <: smm.Command] = (T, T#Response)
-    type CommandAndResponse = CommandAndResponseF[smm.Command]
+    type CommandAndResponse                     = CommandAndResponseF[smm.Command]
 
     sealed trait Operation
 
-    case class Begin(fiberId: FiberId) extends Operation
+    case class Begin(fiberId: FiberId)                             extends Operation
     case class Complete(fiberId: FiberId, cnr: CommandAndResponse) extends Operation
 
     type History = List[Operation]
 
     def linearizable(history: History, model: smm.Model): Boolean = {
       @tailrec
-      def findResponse(fiberId: FiberId, history: History, acc: History = Nil): (CommandAndResponse, History) = {
+      def findResponse(fiberId: FiberId, history: History, acc: History = Nil): (CommandAndResponse, History) =
         history match {
-          case Nil => throw new IllegalStateException("No response found")
+          case Nil                            => throw new IllegalStateException("No response found")
           case Complete(`fiberId`, cnr) :: xs => (cnr, acc.reverse ++ xs)
-          case Begin(`fiberId`) :: xs => findResponse(fiberId, xs, acc)
-          case x :: xs => findResponse(fiberId, xs, x :: acc)
+          case x :: xs                        => findResponse(fiberId, xs, x :: acc)
         }
-      }
 
       @tailrec
-      def takeConcurrentInvocations(history: History, acc: List[FiberId] = Nil): List[FiberId] =
+      def takeConcurrentCommands(
+        history: History,
+        previousHistory: History = Nil,
+        acc: List[(CommandAndResponse, History)] = Nil
+      ): List[(CommandAndResponse, History)] =
         history match {
-          case Begin(fiberId) :: xs => takeConcurrentInvocations(xs, fiberId :: acc)
-          case _ => acc.reverse
+          case (cmd @ Begin(fiberId)) :: xs =>
+            val (cnr, remainingHistory) = findResponse(fiberId, xs)
+            takeConcurrentCommands(
+              xs,
+              cmd :: previousHistory,
+              (cnr, previousHistory.reverse ++ remainingHistory) :: acc
+            )
+          case _                            => acc.reverse
         }
 
       val stack = mutable.Stack.empty[(smm.Model, CommandAndResponse, History)]
 
       def pushNextStates(model: smm.Model, history: History): Unit =
-        for (id <- takeConcurrentInvocations(history)) {
-          val (cnr, remainingHistory) = findResponse(id, history)
+        for ((cnr, remainingHistory) <- takeConcurrentCommands(history))
           stack.push((model, cnr, remainingHistory))
-        }
 
       pushNextStates(model, history)
 
       var found = false
       while (!found && stack.nonEmpty) {
         val (model, (command, response), history) = stack.pop()
-        val (nextModel, modelResponse) = command.dispatchModel(model)
+        val (nextModel, modelResponse)            = command.dispatchModel(model)
         if (response == modelResponse) {
           if (history.isEmpty) found = true
           else pushNextStates(nextModel, history)
@@ -140,8 +147,8 @@ object ModelChecks {
 
     for {
       historyRef <- Ref.make[History](Nil)
-      _ <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
-      history <- historyRef.get.map(_.reverse)
+      _          <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
+      history    <- historyRef.get.map(_.reverse)
     } yield assert(linearizable(history, model))(isTrue)
   }
 }

@@ -1,6 +1,7 @@
 package com.schuwalow.zio.stmt
 
 import zio._
+
 import scala.util.Try
 
 trait Counter {

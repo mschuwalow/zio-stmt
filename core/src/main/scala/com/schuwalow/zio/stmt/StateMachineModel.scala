@@ -27,7 +27,10 @@ abstract class StateMachineModel[R, RealThing] {
   final def generateProgram: Gen[R, List[Command]] =
     Gen.listOf(generateCommand)
 
-  final def generateConcurrentProgram(minConcurrentSteps: Int = 2, maxConcurrentSteps: Int = 5): Gen[R, List[List[Command]]] = {
+  final def generateConcurrentProgram(
+    minConcurrentSteps: Int = 2,
+    maxConcurrentSteps: Int = 5
+  ): Gen[R, List[List[Command]]] = {
     def advanceModel(model: Model, commands: List[Command]): Model =
       commands.foldLeft(model)(step(_, _)._1)
 
@@ -35,11 +38,11 @@ abstract class StateMachineModel[R, RealThing] {
       if (size <= 0) Gen.const(acc.reverse)
       else
         for {
-          n <- Gen.int(minConcurrentSteps, maxConcurrentSteps)
+          n        <- Gen.int(minConcurrentSteps, maxConcurrentSteps)
           commands <- Gen.listOfN(n)(generateCommand)
           if concurrentSave(model, commands)
           nextModel = advanceModel(model, commands)
-          result <- go(nextModel, size - n, commands :: acc)
+          result   <- go(nextModel, size - n, commands :: acc)
         } yield result
 
     Gen.sized { size =>
