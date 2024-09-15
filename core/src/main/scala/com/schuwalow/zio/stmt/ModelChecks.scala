@@ -84,26 +84,26 @@ object ModelChecks {
 
     sealed trait Operation
 
-    case class Begin(id: Long) extends Operation
-    case class Complete(id: Long, cnr: CommandAndResponse) extends Operation
+    case class Begin(fiberId: FiberId) extends Operation
+    case class Complete(fiberId: FiberId, cnr: CommandAndResponse) extends Operation
 
     type History = List[Operation]
 
     def linearizable(history: History, model: smm.Model): Boolean = {
       @tailrec
-      def findResponse(id: Long, history: History, acc: History = Nil): (CommandAndResponse, History) = {
+      def findResponse(fiberId: FiberId, history: History, acc: History = Nil): (CommandAndResponse, History) = {
         history match {
           case Nil => throw new IllegalStateException("No response found")
-          case Complete(`id`, cnr) :: xs => (cnr, acc.reverse ++ xs)
-          case Begin(`id`) :: xs => findResponse(id, xs, acc)
-          case x :: xs => findResponse(id, xs, x :: acc)
+          case Complete(`fiberId`, cnr) :: xs => (cnr, acc.reverse ++ xs)
+          case Begin(`fiberId`) :: xs => findResponse(fiberId, xs, acc)
+          case x :: xs => findResponse(fiberId, xs, x :: acc)
         }
       }
 
       @tailrec
-      def takeConcurrentInvocations(history: History, acc: List[Long] = Nil): List[Long] =
+      def takeConcurrentInvocations(history: History, acc: List[FiberId] = Nil): List[FiberId] =
         history match {
-          case Begin(id) :: xs => takeConcurrentInvocations(xs, id :: acc)
+          case Begin(fiberId) :: xs => takeConcurrentInvocations(xs, fiberId :: acc)
           case _ => acc.reverse
         }
 
@@ -118,12 +118,10 @@ object ModelChecks {
       pushNextStates(model, history)
 
       var found = false
-      var min = history.size
       while (!found && stack.nonEmpty) {
         val (model, (command, response), history) = stack.pop()
         val (nextModel, modelResponse) = command.dispatchModel(model)
         if (response == modelResponse) {
-          min = min min history.size
           if (history.isEmpty) found = true
           else pushNextStates(nextModel, history)
         }
@@ -132,24 +130,17 @@ object ModelChecks {
       found
     }
 
-    val programWithIds = program.foldRight((0L, List.empty[List[(Long, smm.Command)]])) { case (commands, (counter, acc)) =>
-      val (nextCounter, commandsWithId) = commands.foldRight((counter, List.empty[(Long, smm.Command)])) { case (command, (counter, acc)) =>
-        val nextCounter = counter + 1
-        (nextCounter, (counter, command) :: acc)
-      }
-      (nextCounter, commandsWithId :: acc)
-    }._2
-
-    def runConcurrentCommand(id: Long, command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
+    def runConcurrentCommand(command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
       for {
-        _        <- historyRef.update(Begin(id) :: _)
+        fiberId  <- ZIO.fiberId
+        _        <- historyRef.update(Begin(fiberId) :: _)
         response <- command.dispatch(implementation)
-        _        <- historyRef.update(Complete(id, (command, response)) :: _)
+        _        <- historyRef.update(Complete(fiberId, (command, response)) :: _)
       } yield ()
 
     for {
       historyRef <- Ref.make[History](Nil)
-      _ <- ZIO.foreachDiscard(programWithIds)(ZIO.foreachParDiscard(_)( { case (id, cmd) => runConcurrentCommand(id, cmd, historyRef) }))
+      _ <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
       history <- historyRef.get.map(_.reverse)
     } yield assert(linearizable(history, model))(isTrue)
   }
