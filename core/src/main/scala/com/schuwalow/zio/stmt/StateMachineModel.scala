@@ -20,14 +20,21 @@ abstract class StateMachineModel[R, RealThing] {
 
   def initModel: Model
 
-  def generateCommand: Gen[R, Command]
+  def generateCommand(model: Model): Gen[R, Command]
 
   def concurrentSave(model: Model, commands: List[Command]): Boolean
 
   final def generateProgram: Gen[R, List[Command]] =
-    Gen.listOf(generateCommand)
+    Gen.unfoldGen(initModel) { model =>
+      for {
+        command       <- generateCommand(model)
+        (nextModel, _) = step(model, command)
+      } yield (nextModel, command)
+    }
 
   final def generateConcurrentProgram(
+    minProgramSize: Int = 2,
+    maxProgramSize: Int = 1000,
     minConcurrentSteps: Int = 2,
     maxConcurrentSteps: Int = 5
   ): Gen[R, List[List[Command]]] = {
@@ -39,15 +46,13 @@ abstract class StateMachineModel[R, RealThing] {
       else
         for {
           n        <- Gen.int(minConcurrentSteps, maxConcurrentSteps)
-          commands <- Gen.listOfN(n)(generateCommand)
+          commands <- Gen.listOfN(n)(generateCommand(model))
           if concurrentSave(model, commands)
           nextModel = advanceModel(model, commands)
           result   <- go(nextModel, size - n, commands :: acc)
         } yield result
 
-    Gen.sized { size =>
-      go(initModel, size, Nil)
-    }
+    Gen.int(minProgramSize, maxProgramSize).flatMap(go(initModel, _, Nil))
   }
 
   final def step(model: Model, command: Command): (Model, command.Response) = command.dispatchModel(model)

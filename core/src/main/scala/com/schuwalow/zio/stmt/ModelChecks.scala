@@ -2,7 +2,6 @@ package com.schuwalow.zio.stmt
 
 import zio.internal.stacktracer.SourceLocation
 import zio.test.Assertion.Arguments.valueArgument
-import zio.test.Assertion.{equalTo, isTrue}
 import zio.test.{ErrorMessage => M, _}
 import zio.{test => _, _}
 
@@ -30,10 +29,8 @@ object ModelChecks {
       Assertion(
         TestArrow
           .make[A, Boolean] { provided =>
-            val result = TestArrow.run(equalTo(modelResponse).arrow, Right(provided))
-
             val baseMessage =
-              (M.text("response") + M.pretty(provided) + M.did + "match model response" + M.pretty(modelResponse)) ++
+              (M.text("response") + M.pretty(provided) + M.did + "match expected response" + M.pretty(modelResponse)) ++
                 (M.text("command:") + M.pretty(currentCommand)) ++
                 (M.text("model state:") + M.pretty(model))
 
@@ -45,7 +42,7 @@ object ModelChecks {
                   acc ++ (M.text("  *") + M.pretty(next))
                 }
 
-            TestTrace.boolean(result.isSuccess)(baseMessage ++ historyMessage)
+            TestTrace.boolean(provided == modelResponse)(baseMessage ++ historyMessage)
           }
           .withCode(
             "matchesModelResponse",
@@ -63,8 +60,11 @@ object ModelChecks {
           for {
             realResponse              <- command.dispatch(implementation)
             (nextModel, modelResponse) = command.dispatchModel(model)
-            _                         <- assert(realResponse)(equalToModelResponse(modelResponse, model, command, trace))
-            result                    <- go(nextModel, futureCommands, command :: trace)
+            assertionResult            = assert(realResponse)(equalToModelResponse(modelResponse, model, command, trace))
+            result                    <- if (assertionResult.isSuccess)
+                                           go(nextModel, futureCommands, command :: trace)
+                                         else
+                                           ZIO.succeed(assertionResult)
           } yield result
       }
     go(model, program, Nil)
@@ -85,18 +85,20 @@ object ModelChecks {
 
     sealed trait Operation
 
-    case class Begin(fiberId: FiberId)                             extends Operation
-    case class Complete(fiberId: FiberId, cnr: CommandAndResponse) extends Operation
+    case class Begin(id: Int)                             extends Operation
+    case class Complete(id: Int, cnr: CommandAndResponse) extends Operation
 
     type History = List[Operation]
 
     def linearizable(history: History, model: smm.Model): Boolean = {
+      if (history.isEmpty) return true
+
       @tailrec
-      def findResponse(fiberId: FiberId, history: History, acc: History = Nil): (CommandAndResponse, History) =
+      def findResponse(id: Int, history: History, acc: History = Nil): (CommandAndResponse, History) =
         history match {
-          case Nil                            => throw new IllegalStateException("No response found")
-          case Complete(`fiberId`, cnr) :: xs => (cnr, acc.reverse ++ xs)
-          case x :: xs                        => findResponse(fiberId, xs, x :: acc)
+          case Nil                       => throw new IllegalStateException("No response found")
+          case Complete(`id`, cnr) :: xs => (cnr, acc.reverse ++ xs)
+          case x :: xs                   => findResponse(id, xs, x :: acc)
         }
 
       @tailrec
@@ -106,14 +108,14 @@ object ModelChecks {
         acc: List[(CommandAndResponse, History)] = Nil
       ): List[(CommandAndResponse, History)] =
         history match {
-          case (cmd @ Begin(fiberId)) :: xs =>
-            val (cnr, remainingHistory) = findResponse(fiberId, xs)
+          case (cmd @ Begin(id)) :: xs =>
+            val (cnr, remainingHistory) = findResponse(id, xs)
             takeConcurrentCommands(
               xs,
               cmd :: previousHistory,
               (cnr, previousHistory.reverse ++ remainingHistory) :: acc
             )
-          case _                            => acc.reverse
+          case _                       => acc.reverse
         }
 
       val stack = mutable.Stack.empty[(smm.Model, CommandAndResponse, History)]
@@ -128,6 +130,7 @@ object ModelChecks {
       while (!found && stack.nonEmpty) {
         val (model, (command, response), history) = stack.pop()
         val (nextModel, modelResponse)            = command.dispatchModel(model)
+
         if (response == modelResponse) {
           if (history.isEmpty) found = true
           else pushNextStates(nextModel, history)
@@ -137,18 +140,32 @@ object ModelChecks {
       found
     }
 
+    def isLinearizable(model: smm.Model): Assertion[History] =
+      Assertion(
+        TestArrow
+          .make[History, Boolean] { provided =>
+            val resultMessage = M.text("history") + M.did + "linearize."
+            TestTrace.boolean(linearizable(provided, model))(resultMessage)
+          }
+          .withCode(
+            "isLinearizable",
+            valueArgument(model, name = Some("model"))
+          )
+      )
+
     def runConcurrentCommand(command: smm.Command, historyRef: Ref[History]): RIO[R, Unit] =
       for {
-        fiberId  <- ZIO.fiberId
-        _        <- historyRef.update(Begin(fiberId) :: _)
+        id       <- historyRef.modify { old =>
+                      val id = old.size; (id, Begin(id) :: old)
+                    }
         response <- command.dispatch(implementation)
-        _        <- historyRef.update(Complete(fiberId, (command, response)) :: _)
+        _        <- historyRef.update(Complete(id, (command, response)) :: _)
       } yield ()
 
     for {
       historyRef <- Ref.make[History](Nil)
       _          <- ZIO.foreachDiscard(program)(ZIO.foreachParDiscard(_)(runConcurrentCommand(_, historyRef)))
       history    <- historyRef.get.map(_.reverse)
-    } yield assert(linearizable(history, model))(isTrue)
+    } yield assert(history)(isLinearizable(model))
   }
 }
