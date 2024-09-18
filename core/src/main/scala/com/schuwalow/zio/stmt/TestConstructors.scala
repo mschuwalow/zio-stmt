@@ -6,26 +6,26 @@ import zio.{test => _, _}
 
 trait TestConstructors {
 
-  def checkModel[R, A: Tag](smm: StateMachineModel[R, A], makeRealThing: RLayer[R, A])(implicit
+  def checkModel[R, A: Tag, M <: StateMachineModel[R, A]: Tag](makeRealThing: RLayer[R, A], smm: M)(implicit
     sl: SourceLocation,
     t: Trace
   ): Spec[R, Throwable] =
-    test(s"${Tag[A].tag.repr} is compatible with model") {
+    test(s"${Tag[A].tag.repr} is compatible with model ${Tag[M].tag.repr}") {
       check(smm.generateProgram) { program =>
         ZIO
-          .serviceWithZIO[A](ModelChecks.checkConsistencyWithModel(smm)(_, smm.initModel, program))
+          .serviceWithZIO[A](smm.assertConsistencyWithModel(_, smm.initModel, program))
           .provideSomeLayer[R](makeRealThing)
       }
     }
 
-  def checkLineralizability[R, A: Tag](smm: StateMachineModel[R, A], makeRealThing: RLayer[R, A])(implicit
+  def checkLineralizability[R, A: Tag, M <: StateMachineModel[R, A]: Tag](makeRealThing: RLayer[R, A], smm: M)(implicit
     sl: SourceLocation,
     t: Trace
   ): Spec[R, Throwable] =
-    test(s"${Tag[A].tag.repr} fulfills linearizablity") {
+    test(s"${Tag[A].tag.repr} fulfills linearizablity according to model ${Tag[M].tag.repr}") {
       check(smm.generateConcurrentProgram()) { program =>
         ZIO
-          .serviceWithZIO[A](ModelChecks.checkLineralizability(smm)(_, smm.initModel, program))
+          .serviceWithZIO[A](smm.assertLineralizability(_, smm.initModel, program))
           .provideSomeLayer[R](makeRealThing)
       }
     }
