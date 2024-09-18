@@ -115,7 +115,7 @@ abstract class StateMachineModel[R, RealThing] {
     go(modelState, program, Nil)
   }
 
-  private[stmt] final def validateLineralizability(
+  private[stmt] final def validateLinearizability(
     implementation: RealThing,
     modelState: ModelState,
     program: List[List[Command]]

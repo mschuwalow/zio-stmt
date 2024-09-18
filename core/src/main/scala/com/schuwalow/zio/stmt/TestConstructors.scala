@@ -4,46 +4,54 @@ import zio.internal.stacktracer.SourceLocation
 import zio.test._
 import zio.{test => _, _}
 
+import scala.language.implicitConversions
+
 trait TestConstructors {
+  import TestConstructors._
 
-  def checkConsistencyWithModelLayer[R, A: Tag, M <: StateMachineModel[R, A]: Tag](layer: RLayer[R, A], smm: M)(implicit
-    sl: SourceLocation,
-    t: Trace
-  ): Spec[R, Throwable] =
-    test(s"${Tag[A].tag.repr} is compatible with model ${Tag[M].tag.repr}") {
+  def checkConsistencyWithModel[R, A: Tag](
+    impl: ImplementationArg[R, A],
+    smm: StateMachineModel[R, A]
+  )(implicit sl: SourceLocation, t: Trace, modelTag: Tag[smm.type]): Spec[R, Throwable] =
+    test(s"${Tag[A].tag.repr} is compatible with model ${modelTag.tag.repr}") {
       check(smm.generateProgram) { program =>
-        ZIO
-          .serviceWithZIO[A](smm.validateConsistencyWithModel(_, smm.initialState, program))
-          .provideSomeLayer[R](layer)
+        impl.runWithA(smm.validateConsistencyWithModel(_, smm.initialState, program))
       }
     }
 
-  def checkConsistencyWithModel[R, A: Tag, M <: StateMachineModel[R, A]: Tag](implementation: A, smm: M)(implicit
-    sl: SourceLocation,
-    t: Trace
-  ): Spec[R, Throwable] =
-    checkConsistencyWithModelLayer[R, A, M](ZLayer.succeed(implementation), smm)
-
-  def checkLineralizabilityLayer[R, A: Tag, M <: StateMachineModel[R, A]: Tag](
-    layer: RLayer[R, A],
-    smm: M,
+  def checkLinearizability[R, A: Tag](
+    impl: ImplementationArg[R, A],
+    smm: StateMachineModel[R, A],
     programGenerationSettings: ConcurrentProgramGenerationSettings = ConcurrentProgramGenerationSettings.default
-  )(implicit sl: SourceLocation, t: Trace): Spec[R, Throwable] =
-    test(s"${Tag[A].tag.repr} fulfills linearizablity according to model ${Tag[M].tag.repr}") {
+  )(implicit sl: SourceLocation, t: Trace, modelTag: Tag[smm.type]): Spec[R, Throwable] =
+    test(s"${Tag[A].tag.repr} fulfills linearizablity according to model ${modelTag.tag.repr}") {
       check(smm.generateConcurrentProgram(programGenerationSettings)) { program =>
-        ZIO
-          .serviceWithZIO[A](smm.validateLineralizability(_, smm.initialState, program))
-          .provideSomeLayer[R](layer)
+        impl.runWithA(smm.validateLinearizability(_, smm.initialState, program))
       }
     }
+}
 
-  def checkLineralizability[R, A: Tag, M <: StateMachineModel[R, A]: Tag](
-    implementation: A,
-    smm: M,
-    programGenerationSettings: ConcurrentProgramGenerationSettings = ConcurrentProgramGenerationSettings.default
-  )(implicit
-    sl: SourceLocation,
-    t: Trace
-  ): Spec[R, Throwable] =
-    checkLineralizabilityLayer[R, A, M](ZLayer.succeed(implementation), smm, programGenerationSettings)
+object TestConstructors {
+  trait ImplementationArg[-R, +A] {
+    def runWithA[R1 <: R, E >: Throwable, B](f: A => ZIO[R1, E, B]): ZIO[R1, E, B]
+  }
+
+  object ImplementationArg {
+    implicit def layerImplementationArg[R, A: Tag](layer: RLayer[R, A]): ImplementationArg[R, A] =
+      new ImplementationArg[R, A] {
+        def runWithA[R1 <: R, E >: Throwable, B](f: A => ZIO[R1, E, B]): ZIO[R1, E, B] =
+          ZIO.serviceWithZIO[A](f).provideSomeLayer[R1](layer)
+      }
+
+    implicit def zioImplementationArg[R, A](zio: RIO[R, A]): ImplementationArg[R, A] =
+      new ImplementationArg[R, A] {
+        def runWithA[R1 <: R, E >: Throwable, B](f: A => ZIO[R1, E, B]): ZIO[R1, E, B] =
+          zio.flatMap(f)
+      }
+
+    implicit def implementationImplementationArg[A](a: A): ImplementationArg[Any, A] =
+      new ImplementationArg[Any, A] {
+        def runWithA[R1, E >: Throwable, B](f: A => ZIO[R1, E, B]): ZIO[R1, E, B] = f(a)
+      }
+  }
 }

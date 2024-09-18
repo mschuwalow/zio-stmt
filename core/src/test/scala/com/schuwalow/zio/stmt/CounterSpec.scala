@@ -5,9 +5,9 @@ import zio.test.{TestAspect, ZIOSpecDefault}
 
 object CounterSpec extends ZIOSpecDefault {
   def spec = suite("Counter")(
-    checkConsistencyWithModelLayer(ZLayer(Counter.makeOverflowing), CounterModel) @@ TestAspect.failing,
-    checkConsistencyWithModelLayer(ZLayer(Counter.makeCorrect), CounterModel),
-    checkLineralizabilityLayer(ZLayer(Counter.makeNotThreadsafe), CounterModel) @@ TestAspect.failing,
-    checkLineralizabilityLayer(ZLayer(Counter.makeCorrect), CounterModel)
+    checkConsistencyWithModel(ZLayer(Counter.makeOverflowing), CounterModel) @@ TestAspect.failing,
+    checkConsistencyWithModel(ZLayer(Counter.makeCorrect), CounterModel),
+    checkLinearizability(ZLayer(Counter.makeNotThreadsafe), CounterModel) @@ TestAspect.failing,
+    checkLinearizability(ZLayer(Counter.makeCorrect), CounterModel)
   )
 }
