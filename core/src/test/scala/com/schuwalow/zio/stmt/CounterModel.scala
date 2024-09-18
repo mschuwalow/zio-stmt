@@ -2,7 +2,7 @@ package com.schuwalow.zio.stmt
 
 import zio.test.Gen
 
-object CounterStateMachineModel extends StateMachineModel[Any, Counter] {
+object CounterModel extends StateMachineModel[Any, Counter] {
 
   type Model = BigInt
 
@@ -28,11 +28,13 @@ object CounterStateMachineModel extends StateMachineModel[Any, Counter] {
       (model, model.toInt)
   }
 
-  def generateCommand =
+  def generateCommand(model: Model) =
     Gen.oneOf(
-      Gen.const(Get),
-      Gen.int.map(Increment(_))
+      Gen.int(0, Int.MaxValue).map(Increment(_)),
+      Gen.const(Get)
     )
 
   def initModel = BigInt(0)
+
+  def concurrentSave(model: Model, commands: List[Command]) = true
 }
