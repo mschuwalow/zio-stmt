@@ -4,7 +4,7 @@ import zio.test.Gen
 
 object CounterModel extends StateMachineModel[Any, Counter] {
 
-  type Model = BigInt
+  type ModelState = BigInt
 
   sealed trait Command extends BaseCommand
 
@@ -14,7 +14,7 @@ object CounterModel extends StateMachineModel[Any, Counter] {
     def dispatch(counter: Counter) =
       counter.increment(amount)
 
-    def dispatchModel(model: Model) =
+    def advanceModel(model: ModelState) =
       if (model + amount > Int.MaxValue) (Int.MaxValue, ()) else (model + amount, ())
   }
 
@@ -24,17 +24,17 @@ object CounterModel extends StateMachineModel[Any, Counter] {
     def dispatch(counter: Counter) =
       counter.get
 
-    def dispatchModel(model: Model) =
+    def advanceModel(model: ModelState) =
       (model, model.toInt)
   }
 
-  def generateCommand(model: Model) =
+  def generateCommand(model: ModelState) =
     Gen.oneOf(
       Gen.int(0, Int.MaxValue).map(Increment(_)),
       Gen.const(Get)
     )
 
-  def initModel = BigInt(0)
+  def initialState = BigInt(0)
 
-  def concurrentSave(model: Model, commands: List[Command]) = true
+  def concurrentSave(model: ModelState, commands: List[Command]) = true
 }
